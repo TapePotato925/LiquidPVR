@@ -1,0 +1,84 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  export-xcode-project:
+    name: Export iOS Xcode project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Unity Library cache
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-iOS-${{ hashFiles('Packages/packages-lock.json', 'ProjectSettings/ProjectVersion.txt') }}
+          restore-keys: |
+            Library-iOS-
+
+      - name: Build Xcode project with Unity
+        uses: game-ci/unity-builder@v5.0.0
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: iOS
+          unityVersion: auto
+          buildName: LiquidPVR
+          buildsPath: build
+
+      - name: Upload Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidpvr-xcode-project
+          path: build/iOS
+          if-no-files-found: error
+          retention-days: 7
+
+  package-unsigned-ipa:
+    name: Compile and package unsigned IPA
+    needs: export-xcode-project
+    runs-on: macos-latest
+    steps:
+      - name: Download Xcode project
+        uses: actions/download-artifact@v4
+        with:
+          name: liquidpvr-xcode-project
+          path: xcode
+
+      - name: Build without code signing
+        working-directory: xcode
+        run: |
+          xcodebuild \
+            -workspace Unity-iPhone.xcworkspace \
+            -scheme Unity-iPhone \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$PWD/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Create unsigned IPA
+        working-directory: xcode
+        run: |
+          mkdir -p Payload
+          cp -R DerivedData/Build/Products/Release-iphoneos/LiquidPVR.app Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload LiquidPVR-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiquidPVR-unsigned-ipa
+          path: xcode/LiquidPVR-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
